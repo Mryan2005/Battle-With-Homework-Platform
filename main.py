@@ -1,10 +1,22 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import time
-import threading  # 新增导入
+import threading
+import sys  # 新增导入
 
 import pyautogui
 import keyboard
+
+# 新增：Windows API 相关定义
+if sys.platform == 'win32':
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    # 定义 Windows API 常量
+    WM_INPUTLANGCHANGEREQUEST = 0x0050
+    # 美式键盘布局标识符
+    HKL_EN_US = 0x04090409
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
@@ -57,6 +69,32 @@ class App:
 
     # 移除旧的 Tkinter 快捷键安装方法
     # def _install_hotkey_priority(self): ...
+
+    # 新增：Windows 平台下的 API 辅助函数
+    def _get_foreground_window_pid(self):
+        if sys.platform != 'win32':
+            return None, None
+        hwnd = user32.GetForegroundWindow()
+        pid = wintypes.DWORD()
+        tid = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return tid, hwnd
+
+    def _get_current_keyboard_layout(self):
+        if sys.platform != 'win32':
+            return None
+        tid, _ = self._get_foreground_window_pid()
+        if not tid:
+            return None
+        return user32.GetKeyboardLayout(tid)
+
+    def _switch_keyboard_layout(self, layout_hkl):
+        if sys.platform != 'win32':
+            return
+        _, hwnd = self._get_foreground_window_pid()
+        if not hwnd:
+            return
+        user32.PostMessageA(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, layout_hkl)
+        time.sleep(0.1)  # 等待布局切换生效
 
     # 新增：设置全局快捷键
     def _setup_global_hotkey(self):
@@ -136,7 +174,15 @@ class App:
 
     # 新增：在单独线程中执行输入，避免阻塞 GUI
     def _threaded_paste(self):
+        original_layout = None
         try:
+            # 仅在 Windows 平台下切换输入法
+            if sys.platform == 'win32':
+                original_layout = self._get_current_keyboard_layout()
+                if original_layout and original_layout != HKL_EN_US:
+                    print(f"当前输入法: {hex(original_layout)}，切换到美式键盘...")
+                    self._switch_keyboard_layout(HKL_EN_US)
+
             # 直接逐字输入，不使用剪贴板或粘贴快捷键；保留多行换行
             txt = self.pending_text.replace("\r\n", "\n").replace("\r", "\n")
             for char in txt:
@@ -154,6 +200,11 @@ class App:
             )
             self.root.after(0, self.status_var.set, "自动输入失败。")
         finally:
+            # 恢复原始输入法
+            if sys.platform == 'win32' and original_layout and original_layout != HKL_EN_US:
+                print(f"恢复原始输入法: {hex(original_layout)}")
+                self._switch_keyboard_layout(original_layout)
+
             # 恢复按钮与窗口（在主线程中执行）
             if not self.stop_event.is_set():
                 self.root.after(0, self._reset_ui)
