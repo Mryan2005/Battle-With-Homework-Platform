@@ -19,7 +19,7 @@ if sys.platform == 'win32':
     HKL_EN_US = 0x04090409
 
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.05
+pyautogui.PAUSE = 0.01  # 调整停顿时间以适应按键模拟
 
 
 class App:
@@ -172,6 +172,9 @@ class App:
         self.paste_thread = threading.Thread(target=self._threaded_paste, daemon=True)
         self.paste_thread.start()
 
+    # 移除旧的 _process_text_for_typing 方法
+    # def _process_text_for_typing(self, text: str) -> str: ...
+
     # 新增：在单独线程中执行输入，避免阻塞 GUI
     def _threaded_paste(self):
         original_layout = None
@@ -183,14 +186,44 @@ class App:
                     print(f"当前输入法: {hex(original_layout)}，切换到美式键盘...")
                     self._switch_keyboard_layout(HKL_EN_US)
 
-            # 直接逐字输入，不使用剪贴板或粘贴快捷键；保留多行换行
-            txt = self.pending_text.replace("\r\n", "\n").replace("\r", "\n")
-            for char in txt:
-                if self.stop_event.is_set():  # 检查中断信号
+            lines = self.pending_text.replace("\r\n", "\n").replace("\r", "\n").split('\n')
+            current_indent = 0
+
+            for i, line in enumerate(lines):
+                if self.stop_event.is_set():
                     print("输入被中断。")
                     self.root.after(0, self.status_var.set, "操作已中断。")
                     return
-                pyautogui.write(char)
+
+                # 计算目标缩进
+                target_indent = 0
+                for char in line:
+                    if char == '\t':
+                        target_indent += 1
+                    else:
+                        break
+
+                line_content = line[target_indent:]
+
+                # 调整缩进
+                indent_diff = target_indent - current_indent
+                if indent_diff > 0:
+                    for _ in range(indent_diff):
+                        pyautogui.press('tab')
+                elif indent_diff < 0:
+                    for _ in range(abs(indent_diff)):
+                        pyautogui.hotkey('shift', 'tab')
+
+                current_indent = target_indent
+
+                # 输入行内容
+                if line_content:
+                    pyautogui.write(line_content)
+
+                # 如果不是最后一行，则换行
+                if i < len(lines) - 1:
+                    pyautogui.press('enter')
+
             # 只有在未被中断时才显示完成
             if not self.stop_event.is_set():
                 self.root.after(0, self.status_var.set, "已完成输入。")
